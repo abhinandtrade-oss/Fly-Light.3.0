@@ -465,7 +465,31 @@
                 signInBtn.disabled = false;
                 signInBtn.querySelector('.btn-text').textContent = 'Sign In';
             } else {
-                // Success - but don't let them in yet.
+                // Success - Check Global 2FA Policy
+                let is2FA = true; // Default ON
+                try {
+                    const { data: config, error: configErr } = await supabase
+                        .from('site_content')
+                        .select('value')
+                        .eq('key', 'settings_2fa_enabled')
+                        .single();
+
+                    if (config && config.value) {
+                        const val = JSON.parse(config.value);
+                        is2FA = val.enabled !== false;
+                    }
+                } catch (e) { console.warn('2FA config check failed, defaulting to ON'); }
+
+                if (!is2FA) {
+                    // 2FA is Disabled globally: Let them in
+                    showStatus(statusMsg, 'Login successful! Redirecting...', 'success');
+                    setTimeout(() => {
+                        window.location.href = 'dashboard.html';
+                    }, 500);
+                    return;
+                }
+
+                // 2FA is Enabled: Continue with OTP flow
                 // Step 2: Immediate SignOut to enforce 2FA (prevent session persistence)
                 await supabase.auth.signOut();
 
