@@ -348,8 +348,16 @@
             if (allowed) {
                 window.supabaseClient = supabase;
                 document.body.style.display = 'block';
-                loadDashboardData();
-                fetchSalesData();
+                // Wait for the main script to load and expose functions
+                if (window.loadDashboardData) {
+                    window.loadDashboardData();
+                } else {
+                    // detailed fallback or retry could go here, but since modules are deferred in order, this should work.
+                    // If checkPageAuth cached/fast, we might need to wait.
+                    window.addEventListener('load', () => {
+                        if (window.loadDashboardData) window.loadDashboardData();
+                    });
+                }
             }
         }
         initAuth();
@@ -450,7 +458,7 @@
 
                     <!-- Charts Section -->
                     <div class="chart-section">
-                        <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
                             <div class="d-flex align-items-center gap-2">
                                 <h5 style="margin:0; font-weight:700;">Revenue Analytics</h5>
                                 <select id="analytics-scope" class="form-select form-select-sm"
@@ -471,8 +479,9 @@
                                         style="padding: 4px 10px; background-color: #e8604c; border: none;">Go</button>
                                 </div>
                                 <select id="chart-filter" class="form-select form-select-sm" style="width: auto;">
+                                    <option value="current_month" selected>Current Month</option>
                                     <option value="7">Last 7 Days</option>
-                                    <option value="30" selected>Last 30 Days</option>
+                                    <option value="30">Last 30 Days</option>
                                     <option value="custom">Custom Range</option>
                                 </select>
                             </div>
@@ -923,11 +932,21 @@
                 // Do not auto-render here, wait for "Go"
             } else {
                 customInputs.style.display = 'none';
-                const days = parseInt(filterVal);
-                const end = new Date();
-                const start = new Date();
-                start.setDate(end.getDate() - (days - 1));
-                renderChart(start, end);
+
+                if (filterVal === 'current_month') {
+                    const now = new Date();
+                    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0); // Last day of month
+                    renderChart(start, end);
+                } else {
+                    const days = parseInt(filterVal);
+                    if (!isNaN(days)) {
+                        const end = new Date();
+                        const start = new Date();
+                        start.setDate(end.getDate() - (days - 1));
+                        renderChart(start, end);
+                    }
+                }
             }
         }
 
@@ -1052,6 +1071,11 @@
                 errEl.textContent = e.message;
             }
         };
+
+        // Expose functions to global scope for initAuth
+        window.loadDashboardData = loadDashboardData;
+        window.fetchSalesData = fetchSalesData;
+        window.updateChartFromFilter = updateChartFromFilter;
 
 
     </script>
