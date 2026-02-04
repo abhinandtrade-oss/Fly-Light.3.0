@@ -373,7 +373,14 @@
                         <div class="user-role">...</div>
                     </div>
                     <div class="avatar">?</div>
-                    <button onclick="handleLogout()" class="btn btn-outline-danger btn-sm ms-3"
+                    <div id="security-btn-container" style="display: none;">
+                        <button onclick="openSecurityModal()" class="btn btn-outline-primary btn-sm ms-3"
+                            title="Security Settings"
+                            style="border-radius: 50%; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; border-color: #123821; color: #123821;">
+                            <i class="fas fa-shield-alt"></i>
+                        </button>
+                    </div>
+                    <button onclick="handleLogout()" class="btn btn-outline-danger btn-sm ms-2" title="Logout"
                         style="border-radius: 50%; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center;">
                         <i class="fas fa-sign-out-alt"></i>
                     </button>
@@ -619,6 +626,57 @@
         </main>
     </div>
 
+    <!-- Security Modal -->
+    <div class="modal fade" id="securityModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content"
+                style="border-radius: 16px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.1);">
+                <div class="modal-header" style="border-bottom: 1px solid #eee;">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-shield-alt text-primary me-2"></i>Security Settings
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- 2FA Toggle -->
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <h6 class="mb-1 fw-bold">Two-Factor Authentication (2FA)</h6>
+                            <p class="text-muted small mb-0">Require email OTP code when logging in.</p>
+                        </div>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="toggle2FA"
+                                style="width: 3em; height: 1.5em; cursor: pointer;">
+                        </div>
+                    </div>
+
+                    <!-- Verification Section (Hidden by default) -->
+                    <div id="securityVerification"
+                        style="display: none; background: #f8f9fa; padding: 20px; border-radius: 12px;">
+                        <h6 class="text-danger mb-3" style="font-size: 0.9rem;"><i
+                                class="fas fa-lock me-2"></i>Verification Required to Disable</h6>
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Current Password</label>
+                            <input type="password" id="verifyPassword" class="form-control"
+                                placeholder="Enter password">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold" id="mathChallengeLabel">Math Challenge: 5 + 3 =
+                                ?</label>
+                            <input type="number" id="verifyMath" class="form-control" placeholder="Answer">
+                        </div>
+
+                        <div class="d-grid">
+                            <button class="btn btn-danger btn-sm" onclick="confirmDisable2FA()">Confirm Disable</button>
+                        </div>
+                        <div id="verifyError" class="text-danger small mt-2 text-center"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="../assets/js/admin-sidebar-loader.js"></script>
     <script type="module" src="../assets/js/admin-announcement-checker.js"></script>
@@ -734,12 +792,14 @@
                 document.getElementById('card-hr').style.display = 'block';
             }
 
-            // Show Company Scope for Admin/Super Admin
+            // Show Security Button ONLY for Admin/Super Admin
             if (role === 'admin' || role === 'super_admin') {
+                const secBtn = document.getElementById('security-btn-container');
+                if (secBtn) secBtn.style.display = 'block';
+
                 const scopeSelect = document.getElementById('analytics-scope');
                 if (scopeSelect) {
                     scopeSelect.style.display = 'block';
-                    // Add listener
                     scopeSelect.addEventListener('change', (e) => {
                         fetchSalesData(e.target.value);
                     });
@@ -882,6 +942,115 @@
                 alert('Please select both start and end dates');
             }
         });
+
+        // ------------------------------------------------------------------
+        // Security & 2FA Logic
+        // ------------------------------------------------------------------
+        let securityModal = null;
+        let mathAnswer = 0;
+
+        window.openSecurityModal = async () => {
+            if (!securityModal) securityModal = new bootstrap.Modal(document.getElementById('securityModal'));
+
+            // Fetch Global Setting
+            // Default to TRUE if setting doesn't exist yet
+            let is2FA = true;
+            try {
+                const { data, error } = await supabase
+                    .from('site_content')
+                    .select('value')
+                    .eq('key', 'settings_2fa_enabled')
+                    .single();
+
+                if (data && data.value) {
+                    const val = JSON.parse(data.value);
+                    is2FA = val.enabled !== false; // stored as { enabled: true/false }
+                }
+            } catch (e) { console.error('Error reading 2FA setting', e); }
+
+            document.getElementById('toggle2FA').checked = is2FA;
+
+            // Reset UI
+            document.getElementById('securityVerification').style.display = 'none';
+            document.getElementById('toggle2FA').disabled = false;
+
+            securityModal.show();
+        };
+
+        // Handle Switch Click
+        document.getElementById('toggle2FA').addEventListener('click', async (e) => {
+            const isChecking = e.target.checked;
+
+            if (isChecking) {
+                // Enabling is easy - just do it
+                try {
+                    const { error } = await supabase
+                        .from('site_content')
+                        .upsert({ key: 'settings_2fa_enabled', value: JSON.stringify({ enabled: true }) }, { onConflict: 'key' });
+
+                    if (error) throw error;
+                    alert('Global 2FA Policy Enabled successfully.');
+                } catch (err) {
+                    e.target.checked = false; // Revert
+                    alert('Failed to enable: ' + err.message);
+                }
+            } else {
+                // Disabling requires verification
+                e.preventDefault(); // Stop switch from moving immediately
+                e.target.disabled = true; // Lock it
+
+                // Show Verification
+                generateMathChallenge();
+                document.getElementById('securityVerification').style.display = 'block';
+                document.getElementById('verifyPassword').value = '';
+                document.getElementById('verifyMath').value = '';
+                document.getElementById('verifyError').textContent = '';
+            }
+        });
+
+        function generateMathChallenge() {
+            const n1 = Math.floor(Math.random() * 10) + 1;
+            const n2 = Math.floor(Math.random() * 10) + 1;
+            mathAnswer = n1 + n2;
+            document.getElementById('mathChallengeLabel').textContent = `Math Challenge: ${n1} + ${n2} = ?`;
+        }
+
+        window.confirmDisable2FA = async () => {
+            const pwd = document.getElementById('verifyPassword').value;
+            const ans = parseInt(document.getElementById('verifyMath').value);
+            const errEl = document.getElementById('verifyError');
+
+            if (!pwd) { errEl.textContent = 'Password required'; return; }
+            if (ans !== mathAnswer) { errEl.textContent = 'Incorrect Math Answer'; return; }
+
+            // Verify Password via SignIn to prove identity
+            errEl.textContent = 'Verifying...';
+
+            try {
+                const { error } = await supabase.auth.signInWithPassword({
+                    email: currentUser.email,
+                    password: pwd
+                });
+
+                if (error) throw new Error('Incorrect Password');
+
+                // If success, Disable Global 2FA
+                const { error: updateError } = await supabase
+                    .from('site_content')
+                    .upsert({ key: 'settings_2fa_enabled', value: JSON.stringify({ enabled: false }) }, { onConflict: 'key' });
+
+                if (updateError) throw updateError;
+
+                // Success
+                document.getElementById('toggle2FA').checked = false;
+                document.getElementById('toggle2FA').disabled = false;
+                document.getElementById('securityVerification').style.display = 'none';
+                alert('Global 2FA Policy Disabled for ALL users.');
+
+            } catch (e) {
+                errEl.textContent = e.message;
+            }
+        };
 
         loadDashboardData();
     </script>
