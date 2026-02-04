@@ -470,20 +470,41 @@
                 await supabase.auth.signOut();
 
                 // Step 3: Send OTP
-                signInBtn.querySelector('.btn-text').textContent = 'Sending OTP...';
+                // Check Cooldown
+                const lastSent = localStorage.getItem(`lastOtpSentAt_${email}`);
+                const COOLDOWN_MS = 180000; // 3 minutes
+                let shouldSend = true;
 
-                const { error: otpError } = await supabase.auth.signInWithOtp({
-                    email: email,
-                    options: {
-                        shouldCreateUser: false
+                if (lastSent) {
+                    const diff = Date.now() - parseInt(lastSent);
+                    if (diff < COOLDOWN_MS) {
+                        shouldSend = false;
                     }
-                });
+                }
+
+                let otpError = null;
+
+                if (shouldSend) {
+                    signInBtn.querySelector('.btn-text').textContent = 'Sending OTP...';
+                    const { error } = await supabase.auth.signInWithOtp({
+                        email: email,
+                        options: {
+                            shouldCreateUser: false
+                        }
+                    });
+                    otpError = error;
+                }
 
                 if (otpError) {
                     showStatus(statusMsg, 'Error sending OTP: ' + otpError.message, 'error');
                     signInBtn.disabled = false;
                     signInBtn.querySelector('.btn-text').textContent = 'Sign In';
                 } else {
+                    if (shouldSend) {
+                        // Store timestamp for rate limiting
+                        localStorage.setItem(`lastOtpSentAt_${email}`, Date.now().toString());
+                    }
+
                     // Step 4: Show OTP Form
                     loginForm.style.display = 'none';
                     otpForm.style.display = 'block';
@@ -492,6 +513,14 @@
 
                     // Store email for verification step
                     otpForm.dataset.email = email;
+
+                    if (!shouldSend) {
+                        const diff = Date.now() - parseInt(lastSent);
+                        const remainingSeconds = Math.ceil((COOLDOWN_MS - diff) / 1000);
+                        const mins = Math.floor(remainingSeconds / 60);
+                        const secs = remainingSeconds % 60;
+                        showStatus(otpStatusMsg, `Existing code still valid. Wait ${mins}m ${secs}s for new one.`, 'success');
+                    }
                 }
             }
         });
@@ -557,6 +586,20 @@
             const email = otpForm.dataset.email;
             if (!email) return;
 
+            // Check 3-minute Cooldown
+            const lastSent = localStorage.getItem(`lastOtpSentAt_${email}`);
+            if (lastSent) {
+                const diff = Date.now() - parseInt(lastSent);
+                const COOLDOWN_MS = 180000; // 3 minutes
+                if (diff < COOLDOWN_MS) {
+                    const remainingSeconds = Math.ceil((COOLDOWN_MS - diff) / 1000);
+                    const mins = Math.floor(remainingSeconds / 60);
+                    const secs = remainingSeconds % 60;
+                    showStatus(otpStatusMsg, `Please wait ${mins}m ${secs}s before resending.`, 'error');
+                    return;
+                }
+            }
+
             resendOtpLink.style.pointerEvents = 'none';
             resendOtpLink.textContent = 'Sending...';
             clearStatus(otpStatusMsg);
@@ -571,6 +614,9 @@
                 resendOtpLink.textContent = 'Resend Code';
                 resendOtpLink.style.pointerEvents = 'auto';
             } else {
+                // Update timestamp
+                localStorage.setItem(`lastOtpSentAt_${email}`, Date.now().toString());
+
                 showStatus(otpStatusMsg, 'New code sent! Please check your inbox.', 'success');
                 resendOtpLink.textContent = 'Sent!';
                 setTimeout(() => {
@@ -603,6 +649,42 @@
             resetBtn.disabled = true;
             resetBtn.innerHTML = 'Sending...';
             clearStatus(resetStatusMsg);
+
+            // Verify if user is registered (Admin Registry Check)
+            try {
+                const { data: registry, error: regError } = await supabase
+                    .from('site_content')
+                    .select('value')
+                    .eq('key', 'admin_users_registry')
+                    .single();
+
+                let isRegistered = false;
+                if (!regError && registry && registry.value) {
+                    try {
+                        const users = JSON.parse(registry.value);
+                        if (Array.isArray(users)) {
+                            isRegistered = users.some(u => u.email && u.email.toLowerCase() === email.toLowerCase());
+                        }
+                    } catch (parseErr) {
+                        console.error('Error parsing admin registry:', parseErr);
+                    }
+                }
+
+                if (!isRegistered) {
+                    showStatus(resetStatusMsg, 'This email is not registered.', 'error');
+                    resetBtn.disabled = false;
+                    resetBtn.innerHTML = 'Send Reset Link';
+                    return;
+                }
+            } catch (err) {
+                console.warn('Registration check failed', err);
+                // Proceed with caution or block?
+                // For now blocking as safer default if check fails explicitly
+                showStatus(resetStatusMsg, 'Could not verify registration. Please try again.', 'error');
+                resetBtn.disabled = false;
+                resetBtn.innerHTML = 'Send Reset Link';
+                return;
+            }
 
             // Using dashboard.html as redirect target to avoid 404
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
