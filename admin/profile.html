@@ -208,6 +208,29 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Security Settings (Admin Only) -->
+                    <div class="row" id="securitySettingsRow" style="display: none;">
+                        <div class="col-md-12 mb-4">
+                            <div class="content-card">
+                                <div class="section-title">
+                                    <i class="fas fa-shield-alt"></i> Security Settings
+                                </div>
+                                <p class="text-muted mb-4 small">Manage global security settings for the admin portal.
+                                </p>
+
+                                <div class="form-check form-switch custom-switch">
+                                    <input class="form-check-input" type="checkbox" id="twoFactorToggle">
+                                    <label class="form-check-label fw-bold" for="twoFactorToggle">Enforce Two-Factor
+                                        Authentication (2FA)</label>
+                                </div>
+                                <p class="text-muted small mt-2">
+                                    When enabled, all staff members will be required to verify their identity via email
+                                    OTP after entering their password.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -266,6 +289,46 @@
             if (topbarName) topbarName.innerText = fullName.toUpperCase();
             if (topbarRole) topbarRole.innerText = role.replace('_', ' ').toUpperCase();
             if (topbarAvatar) topbarAvatar.innerText = avatarChar;
+
+            // 4. Security Settings (Admin/Super Admin Only)
+            if (role === 'super_admin' || role === 'admin') {
+                const secRow = document.getElementById('securitySettingsRow');
+                if (secRow) secRow.style.display = 'flex';
+
+                // Load initial state
+                try {
+                    const saved2FA = await fetchContent('settings_2fa_enabled');
+                    let isEnabled = true; // Default ON
+                    if (saved2FA) {
+                        const parsed = JSON.parse(saved2FA);
+                        isEnabled = parsed.enabled !== false;
+                    }
+                    document.getElementById('twoFactorToggle').checked = isEnabled;
+                } catch (e) {
+                    console.warn('Failed to load 2FA settings', e);
+                    document.getElementById('twoFactorToggle').checked = true; // Default
+                }
+
+                // Attach listener (Remove old listener if any to prevent duplicates if init called multiple times)
+                const toggle = document.getElementById('twoFactorToggle');
+                const newToggle = toggle.cloneNode(true);
+                toggle.parentNode.replaceChild(newToggle, toggle);
+
+                newToggle.addEventListener('change', async (e) => {
+                    const enabled = e.target.checked;
+                    try {
+                        window.showAlert('Updating security settings...', 'info');
+                        const res = await saveContent('settings_2fa_enabled', JSON.stringify({ enabled }));
+                        if (res.error) throw res.error;
+                        window.showAlert(`Two-Factor Authentication ${enabled ? 'Enabled' : 'Disabled'}`, 'success');
+                    } catch (err) {
+                        console.error('Failed to save 2FA settings', err);
+                        window.showAlert('Failed to update settings: ' + err.message, 'error');
+                        // Revert checkbox if failed
+                        e.target.checked = !enabled;
+                    }
+                });
+            }
         }
 
         window.updateProfile = async () => {
