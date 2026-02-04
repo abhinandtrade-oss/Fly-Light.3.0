@@ -139,7 +139,7 @@
                 <div id="hr-section-users">
                     <div class="row">
                         <!-- Create User Card -->
-                        <div class="col-md-4 mb-4">
+                        <div class="col-md-4 mb-4" id="createUserCard">
                             <div class="content-card h-100">
                                 <div class="card-heading mb-4">
                                     <i class="fas fa-user-plus text-primary"></i> Create New User
@@ -329,7 +329,6 @@
             window.supabaseClient = supabase;
             const { data: { user } } = await supabase.auth.getUser();
             window.currentUser = user;
-            document.body.style.display = 'block';
 
             // 2. Fetch Registry & Roles
             const [dRoles, dRegistry] = await Promise.all([
@@ -351,7 +350,12 @@
             if (currentUserRole !== 'super_admin' && currentUserRole !== 'admin') {
                 const rolesTab = document.getElementById('tab-roles-link');
                 if (rolesTab) rolesTab.style.display = 'none';
+
+                const createUserCard = document.getElementById('createUserCard');
+                if (createUserCard) createUserCard.style.display = 'none';
             }
+
+            document.body.style.display = 'block';
 
             // Sync current user's verification status if needed
             const userInRegistry = userRegistry.find(u => u.email.toLowerCase() === user.email.toLowerCase());
@@ -463,6 +467,11 @@
         };
 
         window.generateUser = async () => {
+            if (currentUserRole !== 'super_admin' && currentUserRole !== 'admin') {
+                window.showAlert('Unauthorized: Only Admins can create new users.', 'error');
+                return;
+            }
+
             const name = document.getElementById('newUserName').value.trim();
             const email = document.getElementById('newUserEmail').value.trim();
             const role = document.getElementById('newUserRole').value;
