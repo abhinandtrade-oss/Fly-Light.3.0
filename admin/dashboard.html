@@ -443,11 +443,31 @@
                     <!-- Charts Section -->
                     <div class="chart-section">
                         <div class="d-flex justify-content-between align-items-center mb-3">
-                            <h5 style="margin:0; font-weight:700;">Revenue Analytics</h5>
-                            <select id="chart-filter" class="form-select form-select-sm" style="width: auto;">
-                                <option value="7">Last 7 Days</option>
-                                <option value="30" selected>Last 30 Days</option>
-                            </select>
+                            <div class="d-flex align-items-center gap-2">
+                                <h5 style="margin:0; font-weight:700;">Revenue Analytics</h5>
+                                <select id="analytics-scope" class="form-select form-select-sm"
+                                    style="display: none; width: auto; font-size: 0.8rem; border-color: #e8604c; color: #e8604c; font-weight: 600;">
+                                    <option value="me">My Performance</option>
+                                    <option value="all">Company Overview</option>
+                                </select>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <div id="custom-date-inputs" class="d-flex align-items-center gap-2"
+                                    style="display: none;">
+                                    <input type="date" id="start-date" class="form-control form-control-sm"
+                                        style="width: 130px; border-color: #e8604c;">
+                                    <span class="text-muted fw-bold">-</span>
+                                    <input type="date" id="end-date" class="form-control form-control-sm"
+                                        style="width: 130px; border-color: #e8604c;">
+                                    <button id="apply-custom-date" class="btn btn-sm btn-primary"
+                                        style="padding: 4px 10px; background-color: #e8604c; border: none;">Go</button>
+                                </div>
+                                <select id="chart-filter" class="form-select form-select-sm" style="width: auto;">
+                                    <option value="7">Last 7 Days</option>
+                                    <option value="30" selected>Last 30 Days</option>
+                                    <option value="custom">Custom Range</option>
+                                </select>
+                            </div>
                         </div>
                         <div style="flex-grow: 1; position: relative;">
                             <canvas id="revenueChart"></canvas>
@@ -609,6 +629,7 @@
 
         let revenueChartInstance = null;
         let salesData = [];
+        let currentUser = null;
 
         // Clock Function
         function updateClock() {
@@ -621,27 +642,74 @@
             if (hours >= 12 && hours < 17) greeting = 'Good Afternoon!';
             else if (hours >= 17) greeting = 'Good Evening!';
 
-            // Only update if placeholder
             const msgEl = document.getElementById('welcome-msg');
-            if (msgEl.textContent.trim() === 'Good Morning!' || msgEl.textContent.includes('Good')) {
-                // We will append Name later, so just keep greeting base for now or let loadDashboardData handle it
+            // Only update if it allows replacement (simple check)
+            if (msgEl.textContent === 'Good Morning!' || msgEl.textContent.trim() === '') {
+                // logic handled in loadDashboard
             }
         }
         setInterval(updateClock, 1000);
         updateClock();
 
+        // ------------------------------------------------------------------
+        // Data Fetching & Rendering
+        // ------------------------------------------------------------------
+
+        async function fetchSalesData(scope = 'me') {
+            if (!currentUser) return;
+
+            let query = supabase
+                .from('sales')
+                .select('final_price, balance_to_receive, margin, sale_date')
+                .order('sale_date', { ascending: true });
+
+            // If scope is 'me', filter by current user. 
+            // If 'all', do not filter (fetch all).
+            if (scope === 'me') {
+                query = query.eq('user_id', currentUser.id);
+            }
+
+            const { data: sales, error } = await query;
+
+            if (error) {
+                console.error('Error fetching sales:', error);
+                return;
+            }
+
+            salesData = sales || [];
+            updateDashboardMetrics();
+
+            // Refresh chart with current filter value
+            updateChartFromFilter();
+        }
+
+        function updateDashboardMetrics() {
+            const sales = salesData;
+
+            const totalBookings = sales.length;
+            const totalRevenue = sales.reduce((acc, sale) => acc + (parseFloat(sale.final_price) || 0), 0);
+            const totalPending = sales.reduce((acc, sale) => acc + (parseFloat(sale.balance_to_receive) || 0), 0);
+            const totalMargin = sales.reduce((acc, sale) => acc + (parseFloat(sale.margin) || 0), 0);
+
+            // Update DOM Elements
+            // We use standard JS to update text content safely
+            const elSales = document.getElementById('stat-total-sales');
+            const elRevenue = document.getElementById('stat-revenue');
+            const elPending = document.getElementById('stat-pending');
+            const elMargin = document.getElementById('stat-margin');
+
+            if (elSales) elSales.textContent = totalBookings;
+            if (elRevenue) elRevenue.textContent = '₹' + Math.round(totalRevenue).toLocaleString();
+            if (elPending) elPending.textContent = '₹' + Math.round(totalPending).toLocaleString();
+            if (elMargin) elMargin.textContent = '₹' + Math.round(totalMargin).toLocaleString();
+        }
+
         async function loadDashboardData() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
+            currentUser = user;
 
-            // Load Sales Data
-            const { data: sales, error } = await supabase
-                .from('sales')
-                .select('final_price, balance_to_receive, margin, sale_date')
-                .eq('user_id', user.id)
-                .order('sale_date', { ascending: true }); // Ascending for chart
-
-            // --- User Info ---
+            // --- 1. Identify Role ---
             const REGISTRY_KEY = 'admin_users_registry';
             const { data: registryData } = await supabase.from('site_content').select('value').eq('key', REGISTRY_KEY).single();
             let registry = [];
@@ -651,57 +719,61 @@
             const role = userEntry?.role || user.user_metadata?.role || (registry.length === 0 ? 'super_admin' : 'admin');
             const name = userEntry?.name || user.user_metadata?.full_name || user.email.split('@')[0];
 
-            // Update DOM
+            // --- 2. Update Header Info ---
             document.querySelector('.user-name').textContent = name;
             document.querySelector('.user-role').textContent = role.replace('_', ' ');
             document.querySelector('.avatar').textContent = name.charAt(0).toUpperCase();
 
-            // Personalize Greeting
             const now = new Date();
             const hours = now.getHours();
             let greeting = hours < 12 ? 'Good Morning' : (hours < 17 ? 'Good Afternoon' : 'Good Evening');
             document.getElementById('welcome-msg').textContent = `${greeting}, ${name.split(' ')[0]}!`;
 
-            // Super Admin check
+            // --- 3. Role-Based Elements ---
             if (role === 'super_admin') {
                 document.getElementById('card-hr').style.display = 'block';
             }
 
-            // --- KPIS ---
-            if (sales && sales.length > 0) {
-                salesData = sales;
-
-                const totalBookings = sales.length;
-                const totalRevenue = sales.reduce((acc, sale) => acc + (parseFloat(sale.final_price) || 0), 0);
-                const totalPending = sales.reduce((acc, sale) => acc + (parseFloat(sale.balance_to_receive) || 0), 0);
-                const totalMargin = sales.reduce((acc, sale) => acc + (parseFloat(sale.margin) || 0), 0);
-
-                document.getElementById('stat-total-sales').textContent = totalBookings;
-                document.getElementById('stat-revenue').textContent = '₹' + Math.round(totalRevenue).toLocaleString();
-                document.getElementById('stat-pending').textContent = '₹' + Math.round(totalPending).toLocaleString();
-                document.getElementById('stat-margin').textContent = '₹' + Math.round(totalMargin).toLocaleString();
-
-                // Init Chart
-                initChart(30);
+            // Show Company Scope for Admin/Super Admin
+            if (role === 'admin' || role === 'super_admin') {
+                const scopeSelect = document.getElementById('analytics-scope');
+                if (scopeSelect) {
+                    scopeSelect.style.display = 'block';
+                    // Add listener
+                    scopeSelect.addEventListener('change', (e) => {
+                        fetchSalesData(e.target.value);
+                    });
+                }
             }
+
+            // --- 4. Initial Data Load ---
+            // Default to 'me'
+            fetchSalesData('me');
         }
 
-        function initChart(days) {
+        function renderChart(startDate, endDate) {
             const ctx = document.getElementById('revenueChart').getContext('2d');
-
-            // Process Data: Group by Date
             const dateMap = {};
-            const today = new Date();
 
-            // Create placeholders for last N days
-            for (let i = days - 1; i >= 0; i--) {
-                const d = new Date();
-                d.setDate(today.getDate() - i);
-                const dateStr = d.toISOString().split('T')[0];
+            // Generate All Dates in Range
+            let current = new Date(startDate);
+            const end = new Date(endDate);
+            // Normalize to midnight to avoid time issues
+            current.setHours(0, 0, 0, 0);
+            end.setHours(0, 0, 0, 0);
+
+            while (current <= end) {
+                // Formatting as YYYY-MM-DD for key matching
+                const year = current.getFullYear();
+                const month = String(current.getMonth() + 1).padStart(2, '0');
+                const day = String(current.getDate()).padStart(2, '0');
+                const dateStr = `${year}-${month}-${day}`;
+
                 dateMap[dateStr] = 0;
+                current.setDate(current.getDate() + 1);
             }
 
-            // Fill with entries
+            // Fill Data
             salesData.forEach(sale => {
                 if (sale.sale_date && dateMap.hasOwnProperty(sale.sale_date)) {
                     dateMap[sale.sale_date] += (parseFloat(sale.final_price) || 0);
@@ -781,9 +853,34 @@
             });
         }
 
-        // Chart Filter Change
-        document.getElementById('chart-filter').addEventListener('change', (e) => {
-            initChart(parseInt(e.target.value));
+        function updateChartFromFilter() {
+            const filterVal = document.getElementById('chart-filter').value;
+            const customInputs = document.getElementById('custom-date-inputs');
+
+            if (filterVal === 'custom') {
+                customInputs.style.display = 'flex';
+                // Do not auto-render here, wait for "Go"
+            } else {
+                customInputs.style.display = 'none';
+                const days = parseInt(filterVal);
+                const end = new Date();
+                const start = new Date();
+                start.setDate(end.getDate() - (days - 1));
+                renderChart(start, end);
+            }
+        }
+
+        // Event Listeners
+        document.getElementById('chart-filter').addEventListener('change', updateChartFromFilter);
+
+        document.getElementById('apply-custom-date').addEventListener('click', () => {
+            const sVal = document.getElementById('start-date').value;
+            const eVal = document.getElementById('end-date').value;
+            if (sVal && eVal) {
+                renderChart(new Date(sVal), new Date(eVal));
+            } else {
+                alert('Please select both start and end dates');
+            }
         });
 
         loadDashboardData();
