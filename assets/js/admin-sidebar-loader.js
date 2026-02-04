@@ -42,9 +42,10 @@ async function loadSidebar() {
         // Default roles if none exist
         if (!rolesConfig || Object.keys(rolesConfig).length === 0) {
             rolesConfig = {
-                'super_admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-hr', 'nav-taxi-portal'] },
-                'admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-taxi-portal'] },
-                'taxi_driver': { permissions: ['nav-dashboard', 'nav-taxi-portal'] }
+                'super_admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-public-announcements', 'nav-careers', 'nav-hr', 'nav-taxi-portal'] },
+                'admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-public-announcements', 'nav-careers', 'nav-taxi-portal'] },
+                'taxi_driver': { permissions: ['nav-dashboard', 'nav-taxi-portal'] },
+                'viewer': { permissions: ['nav-dashboard'] }
             };
         }
 
@@ -79,9 +80,11 @@ async function loadSidebar() {
             'taxi-portal.html': 'nav-taxi-portal',
             'announcements.html': 'nav-announcements',
             'public-announcements.html': 'nav-public-announcements',
+            'careers.html': 'nav-careers',
             'hr.html': 'nav-hr'
         };
 
+        // 4. Sidebar Filtering (RBAC)
         // 4. Sidebar Filtering (RBAC)
         const isSuperAdmin = userRole === 'super_admin';
         const allowedNavs = rolesConfig[userRole]?.permissions || [];
@@ -89,14 +92,46 @@ async function loadSidebar() {
         // If we have no rolesConfig at all (not even defaults), show everything
         const showAll = !rolesConfig || Object.keys(rolesConfig).length === 0;
 
+        // --- BLOCKING LOGIC ---
+        const currentNavId = pageMap[page];
+        // If the current page is a managed admin page (exists in pageMap),
+        // And the user is NOT a Super Admin,
+        // And we are enforcing roles (not showAll),
+        // And the user's role does NOT include the permission for this page...
+        if (currentNavId && !isSuperAdmin && !showAll && !allowedNavs.includes(currentNavId)) {
+            document.body.innerHTML = `
+                <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8f9fa; font-family: 'Outfit', sans-serif;">
+                    <div style="background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; max-width: 400px; width: 90%;">
+                        <div style="width: 80px; height: 80px; background: #fee2e2; color: #ef4444; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 32px;">
+                            <i class="fas fa-lock"></i>
+                        </div>
+                        <h1 style="color: #1f2937; font-size: 24px; margin-bottom: 10px; font-weight: 700;">Access Denied</h1>
+                        <p style="color: #6b7280; font-size: 16px; line-height: 1.5; margin-bottom: 25px;">
+                            You do not have permission to view this page. Please contact your administrator if you believe this is an error.
+                        </p>
+                        <a href="dashboard.html" style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; transition: background 0.2s;">
+                            Return to Dashboard
+                        </a>
+                    </div>
+                </div>
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+                <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+            `;
+            // Stop further execution (don't load sidebar, don't show content)
+            return;
+        }
+
         document.querySelectorAll('.nav-link[id]').forEach(link => {
             const navId = link.id;
 
-            // ALWAYS show the link for the page we are currently on to avoid confusing UI
-            const isCurrentPage = (pageMap[page] === navId);
+            // Strict filtering: If not allowed, remove it.
+            // We removed the "!isCurrentPage" check because if they are here, they are either allowed (loop continues)
+            // or they are blocked (code above returns).
+            // However, visually hiding it is still good practice for when we are solely rendering the sidebar (e.g. on a dashboard they ARE allowed to see).
 
-            if (!showAll && !isSuperAdmin && !allowedNavs.includes(navId) && !isCurrentPage) {
-                link.closest('.nav-item').style.display = 'none';
+            if (!showAll && !isSuperAdmin && !allowedNavs.includes(navId)) {
+                const navItem = link.closest('.nav-item');
+                if (navItem) navItem.style.display = 'none';
             }
         });
 
