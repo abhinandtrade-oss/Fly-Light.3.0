@@ -1,202 +1,230 @@
 /**
  * Admin Sidebar Loader
  * Fetches and injects the sidebar into the page.
+ * Caches content in sessionStorage to prevent reloading delay.
  */
+
+const CACHE_KEYS = {
+    HTML: 'fltt_sidebar_html',
+    METADATA: 'fltt_sidebar_metadata' // { userRole, rolesConfig, userInfo }
+};
 
 async function loadSidebar() {
     const sidebarContainer = document.getElementById('sidebar-container');
     if (!sidebarContainer) return;
 
+    let sidebarHtml = null;
+    let metadata = null;
+
+    // 1. Try Loading from Cache
     try {
-        // 1. Get Supabase client
-        let supabaseClient = window.supabaseClient;
-        if (!supabaseClient) {
-            try {
-                const mod = await import('/assets/js/supabase-client.js');
-                supabaseClient = mod.supabase;
-            } catch (e) {
-                // Fallback for local servers that don't serve from root
-                const mod = await import('./supabase-client.js');
-                supabaseClient = mod.supabase;
+        const cachedHtml = sessionStorage.getItem(CACHE_KEYS.HTML);
+        const cachedMeta = sessionStorage.getItem(CACHE_KEYS.METADATA);
+        if (cachedHtml && cachedMeta) {
+            sidebarHtml = cachedHtml;
+            metadata = JSON.parse(cachedMeta);
+        }
+    } catch (e) {
+        console.warn('Sidebar cache error:', e);
+    }
+
+    // 2. If Cache Miss, Fetch Data
+    if (!sidebarHtml || !metadata) {
+        try {
+            // Import Supabase
+            let supabaseClient = window.supabaseClient;
+            if (!supabaseClient) {
+                try {
+                    const mod = await import('/assets/js/supabase-client.js');
+                    supabaseClient = mod.supabase;
+                } catch (e) {
+                    const mod = await import('./supabase-client.js');
+                    supabaseClient = mod.supabase;
+                }
             }
-        }
 
-        // 2. Auth Check & Role Fetching
-        const { data: { user } } = await supabaseClient.auth.getUser();
-        if (!user) return;
+            // Auth Check
+            const { data: { user } } = await supabaseClient.auth.getUser();
+            if (!user) return; // Main page will handle redirect
 
-        const ROLES_KEY = 'admin_roles_config';
-        const REGISTRY_KEY = 'admin_users_registry';
+            // Fetch Configuration
+            const ROLES_KEY = 'admin_roles_config';
+            const REGISTRY_KEY = 'admin_users_registry';
 
-        const { data: dRoles, error: eRoles } = await supabaseClient.from('site_content').select('value').eq('key', ROLES_KEY).maybeSingle();
-        const { data: dRegistry, error: eRegistry } = await supabaseClient.from('site_content').select('value').eq('key', REGISTRY_KEY).maybeSingle();
+            const { data: dRoles, error: eRoles } = await supabaseClient.from('site_content').select('value').eq('key', ROLES_KEY).maybeSingle();
+            const { data: dRegistry, error: eRegistry } = await supabaseClient.from('site_content').select('value').eq('key', REGISTRY_KEY).maybeSingle();
 
-        if (eRoles?.status === 406 || eRegistry?.status === 406) {
-            window.showAlert("Supabase Project Paused. Please go to Supabase dashboard to unpause it.", "error");
-            return;
-        }
-
-        let rolesConfig = {};
-        try { rolesConfig = dRoles ? JSON.parse(dRoles.value) : {}; } catch (e) { }
-
-        // Default roles if none exist
-        if (!rolesConfig || Object.keys(rolesConfig).length === 0) {
-            rolesConfig = {
-                'super_admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-public-announcements', 'nav-careers', 'nav-hr', 'nav-taxi-portal'] },
-                'admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-public-announcements', 'nav-careers', 'nav-taxi-portal'] },
-                'taxi_driver': { permissions: ['nav-dashboard', 'nav-taxi-portal'] },
-                'viewer': { permissions: ['nav-dashboard'] }
-            };
-        }
-
-        let userRegistry = [];
-        try { userRegistry = dRegistry ? JSON.parse(dRegistry.value) : []; } catch (e) { }
-
-        const userEntry = userRegistry.find(u => u.email.toLowerCase() === user.email.toLowerCase());
-        // If registry is empty, treat the first user as super_admin to allow setup
-        const userRole = userEntry?.role || user.user_metadata?.role || (userRegistry.length === 0 ? 'super_admin' : 'admin');
-
-        // 3. Fetch & Inject Sidebar
-        const response = await fetch('components/sidebar.html');
-        if (!response.ok) throw new Error('Failed to fetch sidebar');
-        const html = await response.text();
-        sidebarContainer.innerHTML = html;
-
-        // Map pages to nav IDs
-        const path = window.location.pathname;
-        const page = path.split("/").pop();
-        const pageMap = {
-            'dashboard.html': 'nav-dashboard',
-            'bookings.html': 'nav-bookings',
-            'insurance.html': 'nav-insurance',
-            'enquiries.html': 'nav-enquiries',
-            'sales.html': 'nav-sales',
-            'accounts.html': 'nav-accounts',
-            'email-config.html': 'nav-email-config',
-            'manage-images.html': 'nav-manage-images',
-            'manage-booking-site.html': 'nav-manage-booking-site',
-            'manage-fleet.html': 'nav-manage-fleet',
-            'manage-destinations.html': 'nav-manage-destinations',
-            'taxi-portal.html': 'nav-taxi-portal',
-            'announcements.html': 'nav-announcements',
-            'public-announcements.html': 'nav-public-announcements',
-            'careers.html': 'nav-careers',
-            'hr.html': 'nav-hr'
-        };
-
-        // 4. Sidebar Filtering (RBAC)
-        // 4. Sidebar Filtering (RBAC)
-        const isSuperAdmin = userRole === 'super_admin';
-        const allowedNavs = rolesConfig[userRole]?.permissions || [];
-
-        // If we have no rolesConfig at all (not even defaults), show everything
-        const showAll = !rolesConfig || Object.keys(rolesConfig).length === 0;
-
-        // --- BLOCKING LOGIC ---
-        const currentNavId = pageMap[page];
-        // If the current page is a managed admin page (exists in pageMap),
-        // And the user is NOT a Super Admin,
-        // And we are enforcing roles (not showAll),
-        // And the user's role does NOT include the permission for this page...
-        if (currentNavId && !isSuperAdmin && !showAll && !allowedNavs.includes(currentNavId)) {
-            document.body.innerHTML = `
-                <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8f9fa; font-family: 'Outfit', sans-serif;">
-                    <div style="background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; max-width: 400px; width: 90%;">
-                        <div style="width: 80px; height: 80px; background: #fee2e2; color: #ef4444; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 32px;">
-                            <i class="fas fa-lock"></i>
-                        </div>
-                        <h1 style="color: #1f2937; font-size: 24px; margin-bottom: 10px; font-weight: 700;">Access Denied</h1>
-                        <p style="color: #6b7280; font-size: 16px; line-height: 1.5; margin-bottom: 25px;">
-                            You do not have permission to view this page. Please contact your administrator if you believe this is an error.
-                        </p>
-                        <a href="dashboard.html" style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; transition: background 0.2s;">
-                            Return to Dashboard
-                        </a>
-                    </div>
-                </div>
-                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-                <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
-            `;
-            // Stop further execution (don't load sidebar, don't show content)
-            return;
-        }
-
-        document.querySelectorAll('.nav-link[id]').forEach(link => {
-            const navId = link.id;
-
-            // Strict filtering: If not allowed, remove it.
-            // We removed the "!isCurrentPage" check because if they are here, they are either allowed (loop continues)
-            // or they are blocked (code above returns).
-            // However, visually hiding it is still good practice for when we are solely rendering the sidebar (e.g. on a dashboard they ARE allowed to see).
-
-            if (!showAll && !isSuperAdmin && !allowedNavs.includes(navId)) {
-                const navItem = link.closest('.nav-item');
-                if (navItem) navItem.style.display = 'none';
+            if (eRoles?.status === 406 || eRegistry?.status === 406) {
+                window.showAlert("Supabase Project Paused. Please go to Supabase dashboard to unpause it.", "error");
+                return;
             }
-        });
 
-        // 5. Inject Footer
-        const mainContent = document.querySelector('.main-content');
-        if (mainContent && !document.querySelector('.admin-footer')) {
-            const footer = document.createElement('footer');
-            footer.className = 'admin-footer';
-            footer.innerHTML = `Powered by <a href="https://www.gridify.in" target="_blank" style="text-decoration: none;"><span>GRIDIFY</span></a>`;
-            mainContent.appendChild(footer);
-        }
+            // Parse Roles
+            let rolesConfig = {};
+            try { rolesConfig = dRoles ? JSON.parse(dRoles.value) : {}; } catch (e) { }
 
-        // 6. Set Active State
-        const activeId = pageMap[page] || 'nav-dashboard';
-        const activeLink = document.getElementById(activeId);
-        if (activeLink) {
-            document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-            activeLink.classList.add('active');
-        }
+            if (!rolesConfig || Object.keys(rolesConfig).length === 0) {
+                rolesConfig = {
+                    'super_admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-public-announcements', 'nav-careers', 'nav-hr', 'nav-taxi-portal'] },
+                    'admin': { permissions: ['nav-dashboard', 'nav-enquiries', 'nav-bookings', 'nav-insurance', 'nav-sales', 'nav-accounts', 'nav-email-config', 'nav-manage-images', 'nav-manage-booking-site', 'nav-manage-fleet', 'nav-manage-destinations', 'nav-announcements', 'nav-public-announcements', 'nav-careers', 'nav-taxi-portal'] },
+                    'taxi_driver': { permissions: ['nav-dashboard', 'nav-taxi-portal'] },
+                    'viewer': { permissions: ['nav-dashboard'] }
+                };
+            }
 
-        // 7. Update Topbar User Info
-        const nameEl = document.querySelector('.user-name');
-        const roleEl = document.querySelector('.user-role');
-        const avatarEl = document.querySelector('.avatar');
+            // Determine User Role
+            let userRegistry = [];
+            try { userRegistry = dRegistry ? JSON.parse(dRegistry.value) : []; } catch (e) { }
 
-        if (nameEl && roleEl && avatarEl) {
-            // Get name from metadata or use email prefix
+            const userEntry = userRegistry.find(u => u.email.toLowerCase() === user.email.toLowerCase());
+            const userRole = userEntry?.role || user.user_metadata?.role || (userRegistry.length === 0 ? 'super_admin' : 'admin');
+
+            // Prepare User Info for Display
             let name = user.user_metadata?.full_name || user.email.split('@')[0];
-
-            // If it's a generic admin email, keep it simple
             if (name.toLowerCase() === 'admin') name = 'Admin';
 
-            nameEl.innerText = name.toUpperCase();
-            roleEl.innerText = userRole.replace('_', ' ').toUpperCase();
-            avatarEl.innerText = name.charAt(0).toUpperCase();
+            const userInfo = {
+                displayName: name.toUpperCase(),
+                roleDisplay: userRole.replace('_', ' ').toUpperCase(),
+                initial: name.charAt(0).toUpperCase()
+            };
 
+            // Fetch Sidebar HTML
+            const response = await fetch('components/sidebar.html');
+            if (!response.ok) throw new Error('Failed to fetch sidebar');
+            sidebarHtml = await response.text();
 
-            // 8. Make Profile Clickable
-            const userProfile = document.querySelector('.user-profile');
-            if (userProfile) {
-                // Style for pointer cursor on non-button elements
-                userProfile.querySelectorAll('.user-info, .avatar').forEach(el => {
-                    el.style.cursor = 'pointer';
-                });
+            metadata = { userRole, rolesConfig, userInfo };
 
-                userProfile.addEventListener('click', (e) => {
-                    // Only redirect if NOT clicking the logout button or its icon
-                    if (!e.target.closest('button')) {
-                        window.location.href = 'profile.html';
-                    }
-                });
+            // Save to Cache
+            sessionStorage.setItem(CACHE_KEYS.HTML, sidebarHtml);
+            sessionStorage.setItem(CACHE_KEYS.METADATA, JSON.stringify(metadata));
+
+        } catch (error) {
+            console.error('Error loading sidebar data:', error);
+            return;
+        }
+    }
+
+    // 3. Render Sidebar (Instant if cached)
+    sidebarContainer.innerHTML = sidebarHtml;
+
+    // 4. Common Logic (Active State, RBAC, etc.)
+    const { userRole, rolesConfig, userInfo } = metadata;
+
+    const path = window.location.pathname;
+    const page = path.split("/").pop();
+    const pageMap = {
+        'dashboard.html': 'nav-dashboard',
+        'bookings.html': 'nav-bookings',
+        'insurance.html': 'nav-insurance',
+        'enquiries.html': 'nav-enquiries',
+        'sales.html': 'nav-sales',
+        'accounts.html': 'nav-accounts',
+        'email-config.html': 'nav-email-config',
+        'manage-images.html': 'nav-manage-images',
+        'manage-booking-site.html': 'nav-manage-booking-site',
+        'manage-fleet.html': 'nav-manage-fleet',
+        'manage-destinations.html': 'nav-manage-destinations',
+        'taxi-portal.html': 'nav-taxi-portal',
+        'announcements.html': 'nav-announcements',
+        'public-announcements.html': 'nav-public-announcements',
+        'careers.html': 'nav-careers',
+        'hr.html': 'nav-hr'
+    };
+
+    // RBAC Check
+    const isSuperAdmin = userRole === 'super_admin';
+    const allowedNavs = rolesConfig[userRole]?.permissions || [];
+    const showAll = !rolesConfig || Object.keys(rolesConfig).length === 0;
+
+    const currentNavId = pageMap[page];
+    if (currentNavId && !isSuperAdmin && !showAll && !allowedNavs.includes(currentNavId)) {
+        document.body.innerHTML = `
+            <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8f9fa; font-family: 'Outfit', sans-serif;">
+                <div style="background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; max-width: 400px; width: 90%;">
+                    <div style="width: 80px; height: 80px; background: #fee2e2; color: #ef4444; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 32px;">
+                        <i class="fas fa-lock"></i>
+                    </div>
+                    <h1 style="color: #1f2937; font-size: 24px; margin-bottom: 10px; font-weight: 700;">Access Denied</h1>
+                    <p style="color: #6b7280; font-size: 16px; line-height: 1.5; margin-bottom: 25px;">
+                        You do not have permission to view this page.
+                    </p>
+                    <a href="dashboard.html" style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; transition: background 0.2s;">
+                        Return to Dashboard
+                    </a>
+                </div>
+            </div>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+            <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+        `;
+        return;
+    }
+
+    // Filter Nav Links
+    document.querySelectorAll('.nav-link[id]').forEach(link => {
+        const navId = link.id;
+        if (!showAll && !isSuperAdmin && !allowedNavs.includes(navId)) {
+            const navItem = link.closest('.nav-item');
+            if (navItem) {
+                navItem.style.display = 'none';
+            } else {
+                // Fallback for malformed HTML (link not in li)
+                link.style.display = 'none';
             }
+        }
+    });
 
-            // 9. Init Mobile Sidebar
-            initMobileSidebar();
+    // Inject Footer
+    const mainContent = document.querySelector('.main-content');
+    if (mainContent && !document.querySelector('.admin-footer')) {
+        const footer = document.createElement('footer');
+        footer.className = 'admin-footer';
+        footer.innerHTML = `Powered by <a href="https://www.gridify.in" target="_blank" style="text-decoration: none;"><span>GRIDIFY</span></a>`;
+        mainContent.appendChild(footer);
+    }
 
+    // Set Active State
+    const activeId = pageMap[page] || 'nav-dashboard';
+    const activeLink = document.getElementById(activeId);
+    if (activeLink) {
+        document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+        activeLink.classList.add('active');
+    }
+
+    // Update Topbar Info
+    const nameEl = document.querySelector('.user-name');
+    const roleEl = document.querySelector('.user-role');
+    const avatarEl = document.querySelector('.avatar');
+
+    if (nameEl && roleEl && avatarEl) {
+        nameEl.innerText = userInfo.displayName;
+        roleEl.innerText = userInfo.roleDisplay;
+        avatarEl.innerText = userInfo.initial;
+
+        // Profile Click
+        const userProfile = document.querySelector('.user-profile');
+        if (userProfile) {
+            userProfile.querySelectorAll('.user-info, .avatar').forEach(el => {
+                el.style.cursor = 'pointer';
+            });
+            userProfile.addEventListener('click', (e) => {
+                if (!e.target.closest('button')) {
+                    window.location.href = 'profile.html';
+                }
+            });
         }
 
-    } catch (error) {
-        console.error('Error loading sidebar:', error);
+        initMobileSidebar();
     }
 }
 
 // Global Logout function (shared across pages)
 window.handleLogout = async () => {
+    // Clear Sidebar Cache
+    sessionStorage.removeItem(CACHE_KEYS.HTML);
+    sessionStorage.removeItem(CACHE_KEYS.METADATA);
+
     if (window.supabaseClient) {
         const { error } = await window.supabaseClient.auth.signOut();
         if (!error) window.location.href = 'login.html';
