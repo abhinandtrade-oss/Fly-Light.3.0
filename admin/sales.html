@@ -603,6 +603,39 @@
         </div>
     </div>
 
+    <!-- Email Logs Modal -->
+    <div class="modal fade" id="emailLogsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title"><i class="fas fa-history me-2"></i> Email History</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Date & Time</th>
+                                    <th>Sent By</th>
+                                    <th>To</th>
+                                    <th>Status</th>
+                                    <th>Details</th>
+                                </tr>
+                            </thead>
+                            <tbody id="emailLogsBody">
+                                <!-- Injected -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Service Types Modal -->
     <div class="modal fade" id="serviceTypesModal" tabindex="-1">
         <div class="modal-dialog">
@@ -634,6 +667,7 @@
         let currentUser = null;
         let currentUserRole = 'viewer';
         let allSales = [];
+        let emailLogs = [];
         let filteredSales = [];
         let deletionRequests = [];
         let currentTab = 'my';
@@ -753,6 +787,11 @@
                 return;
             }
             allSales = data;
+
+            // Load Email Logs
+            const { data: logs } = await supabase.from('sales_email_logs').select('*');
+            emailLogs = logs || [];
+
             calculateStats();
             switchSalesTab(currentTab);
         }
@@ -1048,6 +1087,8 @@
             tbody.innerHTML = filteredSales.map(s => {
                 const req = deletionRequests.find(r => r.sale_id == s.id && r.status === 'pending');
                 const rejected = deletionRequests.find(r => r.sale_id == s.id && r.status === 'rejected');
+                const sLogs = emailLogs.filter(l => l.sale_id == s.id);
+                const emailCount = sLogs.length;
 
                 return `
                 <tr>
@@ -1076,6 +1117,13 @@
                                 <div class="text-danger fw-bold" style="font-size: 10px;">Reason:</div>
                                 <div class="text-dark" style="font-size: 10px; line-height: 1.2;">${rejected.admin_feedback}</div>
                                 <button class="btn btn-link btn-sm p-0 mt-1 text-danger" style="font-size: 9px; text-decoration: none;" onclick="clearRejection('${s.id}')">Dismiss</button>
+                            </div>
+                        ` : ''}
+                        ${emailCount > 0 ? `
+                            <div class="mt-2" style="cursor: pointer;" onclick="viewEmailLogs('${s.id}')">
+                                <span class="badge bg-info text-white" title="Click to view email history">
+                                    <i class="fas fa-envelope-open-text me-1"></i> ${emailCount} Email${emailCount > 1 ? 's' : ''} Sent
+                                </span>
                             </div>
                         ` : ''}
                     </td>
@@ -1411,14 +1459,61 @@
                     body: JSON.stringify(payload)
                 });
 
-                window.showAlert('Email trigger sent successfully!', 'success');
+                // Log to DB
+                await supabase.from('sales_email_logs').insert([{
+                    sale_id: selectedSaleForEmail.id,
+                    sender_email: config.sender_email || currentUser.email,
+                    recipient_email: target,
+                    subject: payload.subject,
+                    body_content: payload.body, // Save full HTML body
+                    sent_by: currentUser.id
+                }]);
+
+                window.showAlert('Email trigger sent & logged successfully!', 'success');
                 bootstrap.Modal.getInstance(document.getElementById('emailSendModal')).hide();
+                loadSales(); // Reload to show updated log count
 
             } catch (e) {
                 console.error(e);
                 window.showAlert('Failed to trigger webhook. Check your network or script URL.', 'error');
             }
         }
+
+        window.viewEmailLogs = (saleId) => {
+            const logs = emailLogs.filter(l => l.sale_id == saleId);
+            logs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            const tbody = document.getElementById('emailLogsBody');
+            if (logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center py-3 text-muted">No emails found for this sale.</td></tr>';
+            } else {
+                tbody.innerHTML = logs.map(l => `
+                    <tr>
+                        <td>
+                            <div class="fw-600">${new Date(l.created_at).toLocaleDateString()}</div>
+                            <div class="small text-muted">${new Date(l.created_at).toLocaleTimeString()}</div>
+                        </td>
+                        <td><span class="small">${l.sender_email}</span></td>
+                        <td>${l.recipient_email}</td>
+                        <td><span class="badge bg-success">Sent</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#email-body-${l.id}">
+                                View
+                            </button>
+                        </td>
+                    </tr>
+                    <tr class="collapse bg-light" id="email-body-${l.id}">
+                        <td colspan="5" class="p-3">
+                            <div class="small text-muted fw-bold">Subject: ${l.subject || 'N/A'}</div>
+                            <hr class="my-1">
+                            <div class="bg-white p-2 border rounded">${l.body_content || 'No content logged.'}</div>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+
+            new bootstrap.Modal(document.getElementById('emailLogsModal')).show();
+        };
 
         init();
     </script>
