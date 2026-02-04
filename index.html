@@ -1503,6 +1503,7 @@
                                     <li><a href="javascript:void(0)" onclick="GDPR.showSettings()">Manage Cookies</a>
                                     </li>
                                     <li><a href="faq.html">FAQs</a></li>
+                                    <li><a href="javascript:void(0)" id="staff-login-btn">Staff Login</a></li>
                                 </ul>
                             </div>
                         </div>
@@ -1714,6 +1715,243 @@
                     document.head.appendChild(link);
                 });
             }, 3000); // 3 second delay to ensure main thread is free
+        });
+    </script>
+
+    <!-- Staff Login Modal -->
+    <div id="staffLoginModal" class="staff-login-modal">
+        <div class="staff-login-content">
+            <span class="staff-login-close">&times;</span>
+            <h3 style="color: #333; margin-bottom: 15px;">Security Check</h3>
+            <p id="challengeInstruction" style="margin-bottom: 15px; color: #666;">Verify you are human:</p>
+
+            <div id="challengeContainer" class="challenge-container">
+                <!-- Challenge content will be injected here -->
+            </div>
+
+            <input type="text" id="challengeInput" class="input-field" placeholder="Enter answer"
+                style="display: none;">
+
+            <p id="authError" class="error-msg">Incorrect verification. Please try again.</p>
+
+            <button id="humanCheckBtn" class="human-check-btn">Verify & Login</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const loginBtn = document.getElementById('staff-login-btn');
+            const modal = document.getElementById('staffLoginModal');
+            const closeBtn = document.querySelector('.staff-login-close');
+            const verifyBtn = document.getElementById('humanCheckBtn');
+            const container = document.getElementById('challengeContainer');
+            const inputField = document.getElementById('challengeInput');
+            const instruction = document.getElementById('challengeInstruction');
+            const errorMsg = document.getElementById('authError');
+
+            let currentChallengeType = '';
+            let correctAnswer = '';
+
+            // Available challenges
+            const challenges = ['math', 'text', 'pattern'];
+
+            // Pattern Puzzle Icons
+            const icons = ['✈️', '🌍', '🧳', '🏨', '🚕', '🗺️', '🎫', '🏝️'];
+
+            function getRandomChallenge() {
+                const rand = Math.floor(Math.random() * challenges.length);
+                return challenges[rand];
+            }
+
+            function initChallenge() {
+                // Reset state
+                container.innerHTML = '';
+                inputField.value = '';
+                inputField.style.display = 'block';
+                errorMsg.style.display = 'none';
+                verifyBtn.disabled = false;
+
+                currentChallengeType = getRandomChallenge();
+
+                if (currentChallengeType === 'math') {
+                    setupMathChallenge();
+                } else if (currentChallengeType === 'text') {
+                    setupTextCaptcha();
+                } else if (currentChallengeType === 'pattern') {
+                    setupPatternChallenge();
+                }
+            }
+
+            function setupMathChallenge() {
+                instruction.textContent = "Solve the equation:";
+                const num1 = Math.floor(Math.random() * 10) + 1;
+                const num2 = Math.floor(Math.random() * 10) + 1;
+                correctAnswer = (num1 + num2).toString();
+
+                const div = document.createElement('div');
+                div.className = 'math-question';
+                div.textContent = `${num1} + ${num2} = ?`;
+                container.appendChild(div);
+
+                inputField.placeholder = "Enter number";
+                inputField.type = "number";
+                setTimeout(() => inputField.focus(), 100);
+            }
+
+            function setupTextCaptcha() {
+                instruction.textContent = "Type the characters below:";
+                inputField.placeholder = "Enter characters";
+                inputField.type = "text";
+
+                // Generate random string
+                const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+                let result = "";
+                for (let i = 0; i < 5; i++) {
+                    result += chars.charAt(Math.floor(Math.random() * chars.length));
+                }
+                correctAnswer = result;
+
+                // Create Canvas
+                const canvas = document.createElement('canvas');
+                canvas.width = 150;
+                canvas.height = 50;
+                canvas.className = 'captcha-canvas';
+                const ctx = canvas.getContext('2d');
+
+                // Background
+                ctx.fillStyle = '#f2f2f2';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Text
+                ctx.font = '30px Arial';
+                ctx.fillStyle = '#333';
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'center';
+
+                // Add noise
+                for (let i = 0; i < 30; i++) {
+                    ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.2})`;
+                    ctx.beginPath();
+                    ctx.arc(Math.random() * canvas.width, Math.random() * canvas.height, 2, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+
+                // Draw rotated text
+                ctx.save();
+                ctx.translate(canvas.width / 2, canvas.height / 2);
+                ctx.rotate((Math.random() - 0.5) * 0.4);
+                ctx.fillStyle = '#235f01';
+                ctx.fillText(result, 0, 0);
+                ctx.restore();
+
+                // Lines
+                for (let i = 0; i < 3; i++) {
+                    ctx.strokeStyle = `rgba(35, 95, 1, ${Math.random()})`;
+                    ctx.beginPath();
+                    ctx.moveTo(Math.random() * canvas.width, Math.random() * canvas.height);
+                    ctx.lineTo(Math.random() * canvas.width, Math.random() * canvas.height);
+                    ctx.stroke();
+                }
+
+                container.appendChild(canvas);
+                setTimeout(() => inputField.focus(), 100);
+            }
+
+            function setupPatternChallenge() {
+                instruction.textContent = "Match the puzzle:";
+                inputField.style.display = 'none'; // No text input for pattern
+
+                const targetIcon = icons[Math.floor(Math.random() * icons.length)];
+                correctAnswer = targetIcon;
+
+                // Instructions
+                const p = document.createElement('p');
+                p.className = 'pattern-target';
+                p.innerHTML = `Tap the <span class="pattern-target-icon">${targetIcon}</span> icon`;
+                container.appendChild(p);
+
+                // Grid
+                const grid = document.createElement('div');
+                grid.className = 'pattern-grid';
+
+                // Generate options (1 correct + 3/4 wrong)
+                let options = [targetIcon];
+                while (options.length < 5) {
+                    const icon = icons[Math.floor(Math.random() * icons.length)];
+                    if (!options.includes(icon)) options.push(icon);
+                }
+
+                // Shuffle
+                options.sort(() => Math.random() - 0.5);
+
+                options.forEach(icon => {
+                    const btn = document.createElement('div');
+                    btn.className = 'pattern-option';
+                    btn.textContent = icon;
+                    btn.onclick = function () {
+                        // Deselect others
+                        document.querySelectorAll('.pattern-option').forEach(el => el.classList.remove('selected'));
+                        btn.classList.add('selected');
+                        // Store selection in input field (hidden) logic
+                        inputField.value = icon;
+                    };
+                    grid.appendChild(btn);
+                });
+
+                container.appendChild(grid);
+            }
+
+            if (loginBtn && modal && closeBtn && verifyBtn) {
+                loginBtn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    initChallenge();
+                    modal.style.display = 'flex';
+                });
+
+                closeBtn.addEventListener('click', function () {
+                    modal.style.display = 'none';
+                });
+
+                window.addEventListener('click', function (e) {
+                    if (e.target === modal) {
+                        modal.style.display = 'none';
+                    }
+                });
+
+                const performLogin = () => {
+                    let userVal = inputField.value;
+
+                    // Case insensitive for text captcha
+                    if (currentChallengeType === 'text') {
+                        userVal = userVal.toUpperCase();
+                    }
+
+                    if (userVal === correctAnswer) {
+                        // Success
+                        errorMsg.style.display = 'none';
+                        // Obfuscated URL redirection
+                        // "admin/login.html" encoded in base64 is YWRtaW4vbG9naW4uaHRtbA==
+                        const target = atob('YWRtaW4vbG9naW4uaHRtbA==');
+                        window.location.replace(target);
+                    } else {
+                        // Failure
+                        errorMsg.style.display = 'block';
+                        // Small delay then reset challenge to prevent brute force
+                        setTimeout(() => {
+                            initChallenge();
+                        }, 1000);
+                    }
+                };
+
+                verifyBtn.addEventListener('click', performLogin);
+
+                // Allow Enter key to submit
+                inputField.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') {
+                        performLogin();
+                    }
+                });
+            }
         });
     </script>
 </body>
