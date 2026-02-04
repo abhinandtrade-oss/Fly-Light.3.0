@@ -448,7 +448,7 @@
 
             // Using dashboard.html as redirect target to avoid 404
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                redirectTo: window.location.origin + '/admin/dashboard.html',
+                redirectTo: 'https://www.flylighttoursandtravels.com/admin/reset-password.html',
             });
 
             if (error) {
