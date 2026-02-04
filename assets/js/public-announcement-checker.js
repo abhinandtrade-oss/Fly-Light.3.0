@@ -7,20 +7,34 @@ import { supabase } from './supabase-client.js';
 
 async function checkPublicAnnouncements() {
     try {
-        // 1. Fetch active announcements specifically marked for 'public'
-        const now = new Date().toISOString();
-        const { data: announcements, error } = await supabase
-            .from('announcements')
-            .select('*')
-            .lte('start_date', now)
-            .gte('end_date', now)
-            .contains('target_roles', ['public'])
-            .order('created_at', { ascending: false });
+        // 1. Fetch from cached site_content (bypassing RLS on announcements table)
+        const { data: cacheData, error } = await supabase
+            .from('site_content')
+            .select('value')
+            .eq('key', 'public_announcements_cache')
+            .maybeSingle();
 
-        if (error || !announcements || announcements.length === 0) return;
+        let announcements = [];
+        if (cacheData && cacheData.value) {
+            try {
+                announcements = JSON.parse(cacheData.value);
+            } catch (e) { console.error('Error parsing cache', e); }
+        }
 
-        // 2. Queue up announcements to show one after another
-        window.publicAnnouncementQueue = announcements;
+        if (!announcements || announcements.length === 0) return;
+
+        // 2. Client-side filter for active dates
+        const now = new Date();
+        const activeAnnouncements = announcements.filter(anc => {
+            const start = new Date(anc.start_date);
+            const end = new Date(anc.end_date);
+            return now >= start && now <= end;
+        });
+
+        if (activeAnnouncements.length === 0) return;
+
+        // 3. Queue up announcements
+        window.publicAnnouncementQueue = activeAnnouncements;
         showNextPublicAnnouncement();
     } catch (err) {
         console.error('Error in public announcement checker:', err);
@@ -143,10 +157,20 @@ function displayPublicAnnouncementPopup(anc) {
     }
 
     // Using window.bootstrap as index.html loads it
-    if (window.bootstrap) {
-        const bootstrapModal = new window.bootstrap.Modal(modalEl);
-        bootstrapModal.show();
-    }
+    const showModal = () => {
+        if (window.bootstrap) {
+            try {
+                const bootstrapModal = new window.bootstrap.Modal(modalEl);
+                bootstrapModal.show();
+            } catch (e) {
+                console.error("Failed to show boostrap modal", e);
+            }
+        } else {
+            // Retry if bootstrap is not yet loaded
+            setTimeout(showModal, 100);
+        }
+    };
+    showModal();
 }
 
 // Start checking
