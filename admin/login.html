@@ -331,6 +331,36 @@
             </div>
             <div id="resetStatusMsg" class="status-msg"></div>
         </form>
+
+        <!-- OTP Form Logic (Hidden) -->
+        <form id="otpForm" style="display: none;" novalidate>
+            <div class="login-header" style="margin-bottom: 20px;">
+                <h1>Two-Factor Auth</h1>
+                <p>Please enter the code sent to your email.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="otpCode" class="form-label">Verification Code</label>
+                <div class="input-wrapper">
+                    <input type="text" id="otpCode" class="form-control" placeholder="12345678" required maxlength="8"
+                        autocomplete="one-time-code" aria-label="Verification Code"
+                        style="letter-spacing: 6px; text-align: center; font-size: 20px; font-weight: 600;">
+                    <i class="fas fa-key input-icon"></i>
+                </div>
+                <div style="text-align: right; margin-top: 8px;">
+                    <a href="#" id="resendOtpLink" class="link-text" style="font-size: 13px;">Resend Code</a>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary" id="verifyOtpBtn">
+                <span class="btn-text">Verify & Login</span>
+            </button>
+
+            <div class="text-center mt-4">
+                <a href="#" id="backToLoginFromOtp" class="link-text">Back to Login</a>
+            </div>
+            <div id="otpStatusMsg" class="status-msg"></div>
+        </form>
     </div>
 
     <!-- Logic -->
@@ -348,6 +378,14 @@
         const passwordInput = document.getElementById('password');
         const signInBtn = document.getElementById('signInBtn');
         const resetBtn = document.getElementById('resetBtn');
+
+        // OTP Elements
+        const otpForm = document.getElementById('otpForm');
+        const verifyOtpBtn = document.getElementById('verifyOtpBtn');
+        const otpStatusMsg = document.getElementById('otpStatusMsg');
+        const backToLoginFromOtp = document.getElementById('backToLoginFromOtp');
+        const otpInput = document.getElementById('otpCode');
+        const resendOtpLink = document.getElementById('resendOtpLink');
 
         // Helpers
         function showStatus(element, message, type) {
@@ -401,6 +439,7 @@
         });
 
         // 4. Login Logic
+        // 4. Login Logic (Step 1: Password & Trigger OTP)
         loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('email').value.trim();
@@ -412,9 +451,10 @@
             }
 
             signInBtn.disabled = true;
-            signInBtn.innerHTML = 'Signing in...';
+            signInBtn.querySelector('.btn-text').textContent = 'Verifying Credentials...';
             clearStatus(statusMsg);
 
+            // Step 1: Verify Password
             const { data, error } = await supabase.auth.signInWithPassword({
                 email,
                 password
@@ -423,13 +463,131 @@
             if (error) {
                 showStatus(statusMsg, error.message, 'error');
                 signInBtn.disabled = false;
-                signInBtn.innerHTML = 'Sign In';
+                signInBtn.querySelector('.btn-text').textContent = 'Sign In';
             } else {
-                showStatus(statusMsg, 'Login successful! Redirecting...', 'success');
+                // Success - but don't let them in yet.
+                // Step 2: Immediate SignOut to enforce 2FA (prevent session persistence)
+                await supabase.auth.signOut();
+
+                // Step 3: Send OTP
+                signInBtn.querySelector('.btn-text').textContent = 'Sending OTP...';
+
+                const { error: otpError } = await supabase.auth.signInWithOtp({
+                    email: email,
+                    options: {
+                        shouldCreateUser: false
+                    }
+                });
+
+                if (otpError) {
+                    showStatus(statusMsg, 'Error sending OTP: ' + otpError.message, 'error');
+                    signInBtn.disabled = false;
+                    signInBtn.querySelector('.btn-text').textContent = 'Sign In';
+                } else {
+                    // Step 4: Show OTP Form
+                    loginForm.style.display = 'none';
+                    otpForm.style.display = 'block';
+                    clearStatus(statusMsg);
+                    otpInput.focus();
+
+                    // Store email for verification step
+                    otpForm.dataset.email = email;
+                }
+            }
+        });
+
+        // 5. Verify OTP Logic (Step 2)
+        otpForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const code = otpInput.value.trim();
+            const email = otpForm.dataset.email;
+
+            if (!code) {
+                showStatus(otpStatusMsg, 'Please enter the code.', 'error');
+                return;
+            }
+
+            verifyOtpBtn.disabled = true;
+            verifyOtpBtn.querySelector('.btn-text').textContent = 'Verifying...';
+            clearStatus(otpStatusMsg);
+
+            console.log('Verifying OTP', { email, code: code });
+
+            // Try 'email' type first (Standard for 6-digit OTPs)
+            // Note: Ensure "Email OTP" is enabled in Supabase Auth -> Providers -> Email
+            let { data, error } = await supabase.auth.verifyOtp({
+                email,
+                token: code,
+                type: 'email'
+            });
+
+            // Fallback to 'magiclink' if 'email' fails (some configs treat it as magiclink token)
+            if (error) {
+                console.warn(`'email' type verification failed (${error.message}). Retrying with 'magiclink'...`);
+                const retry = await supabase.auth.verifyOtp({
+                    email,
+                    token: code,
+                    type: 'magiclink'
+                });
+                if (!retry.error) {
+                    data = retry.data;
+                    error = null;
+                }
+            }
+
+            if (error) {
+                console.error('OTP Verification Error:', error);
+                const msg = error.message.includes('expired')
+                    ? 'Code expired or invalid. Please click Resend.'
+                    : error.message;
+                showStatus(otpStatusMsg, msg, 'error');
+                verifyOtpBtn.disabled = false;
+                verifyOtpBtn.querySelector('.btn-text').textContent = 'Verify & Login';
+            } else {
+                showStatus(otpStatusMsg, 'Login successful! Redirecting...', 'success');
                 setTimeout(() => {
                     window.location.href = 'dashboard.html';
                 }, 800);
             }
+        });
+
+        // Resend OTP
+        resendOtpLink.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const email = otpForm.dataset.email;
+            if (!email) return;
+
+            resendOtpLink.style.pointerEvents = 'none';
+            resendOtpLink.textContent = 'Sending...';
+            clearStatus(otpStatusMsg);
+
+            const { error } = await supabase.auth.signInWithOtp({
+                email: email,
+                options: { shouldCreateUser: false }
+            });
+
+            if (error) {
+                showStatus(otpStatusMsg, 'Failed to resend: ' + error.message, 'error');
+                resendOtpLink.textContent = 'Resend Code';
+                resendOtpLink.style.pointerEvents = 'auto';
+            } else {
+                showStatus(otpStatusMsg, 'New code sent! Please check your inbox.', 'success');
+                resendOtpLink.textContent = 'Sent!';
+                setTimeout(() => {
+                    resendOtpLink.textContent = 'Resend Code';
+                    resendOtpLink.style.pointerEvents = 'auto';
+                }, 30000); // 30s cooldown visual
+            }
+        });
+
+        // Back from OTP
+        backToLoginFromOtp.addEventListener('click', (e) => {
+            e.preventDefault();
+            clearStatus(otpStatusMsg);
+            otpForm.style.display = 'none';
+            loginForm.style.display = 'block';
+            signInBtn.disabled = false;
+            signInBtn.querySelector('.btn-text').textContent = 'Sign In';
         });
 
         // 5. Reset Logic
