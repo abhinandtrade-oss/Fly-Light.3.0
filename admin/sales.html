@@ -932,14 +932,36 @@
             const dateInput = document.getElementById('sale_date').value;
             if (!dateInput) return;
 
-            const date = new Date(dateInput);
-            const ddmm = String(date.getDate()).padStart(2, '0') + String(date.getMonth() + 1).padStart(2, '0');
-            const yyyy = date.getFullYear();
+            // Use string splitting to avoid timezone issues with Date()
+            const [y, m, d] = dateInput.split('-');
+            const ddmm = d + m;
+            const yyyy = y;
 
-            // Count existing sales for this specific date in allSales
-            const countForDay = allSales.filter(s => s.sale_date === dateInput).length;
-            const sl = String(countForDay + 1).padStart(2, '0');
+            // Fetch live data from Supabase to find the next available sequence number
+            // This prevents conflicts when multiple users are working simultaneously
+            const { data, error } = await supabase
+                .from('sales')
+                .select('ref_num')
+                .eq('sale_date', dateInput);
 
+            let nextSeq = 1;
+            if (data && data.length > 0) {
+                const existingSeqs = data.map(s => {
+                    // Format: FLTT-DDMM-SL-YYYY
+                    const parts = s.ref_num.split('-');
+                    // We expect 4 parts. The sequence is at index 2 (0-based)
+                    if (parts.length === 4) {
+                        return parseInt(parts[2], 10);
+                    }
+                    return 0;
+                }).filter(n => !isNaN(n) && n > 0);
+
+                if (existingSeqs.length > 0) {
+                    nextSeq = Math.max(...existingSeqs) + 1;
+                }
+            }
+
+            const sl = String(nextSeq).padStart(2, '0');
             document.getElementById('ref_num').value = `FLTT-${ddmm}-${sl}-${yyyy}`;
         };
 
@@ -962,6 +984,11 @@
             if (!form.checkValidity()) {
                 form.reportValidity();
                 return;
+            }
+
+            // Refresh Reference Number for new sales to prevent conflicts (Stale Data fix)
+            if (!editingSaleId) {
+                await window.generateRefNum();
             }
 
             const isEdit = !!editingSaleId;
