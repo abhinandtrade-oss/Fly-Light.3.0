@@ -332,7 +332,8 @@
         window.deleteAnnouncement = async (id) => {
             if (!confirm('Are you sure?')) return;
             await supabase.from('announcements').delete().eq('id', id);
-            loadAnnouncements();
+            await loadAnnouncements();
+            await updatePublicCache();
         };
 
         document.getElementById('public-announcement-form').onsubmit = async (e) => {
@@ -354,12 +355,38 @@
                     : await supabase.from('announcements').insert(payload);
                 if (error) throw error;
                 resetForm();
-                loadAnnouncements();
+                await loadAnnouncements();
+                await updatePublicCache(); // Sync to public cache
                 alert('Published successfully!');
             } catch (err) { alert(err.message); }
         };
 
+        window.updatePublicCache = async () => {
+            // Fetch all future/active public announcements to cache for public view
+            const now = new Date().toISOString();
+            const { data } = await supabase
+                .from('announcements')
+                .select('*')
+                .contains('target_roles', ['public'])
+                .gte('end_date', now)
+                .order('created_at', { ascending: false });
+
+            if (data) {
+                await supabase
+                    .from('site_content')
+                    .upsert({ key: 'public_announcements_cache', value: JSON.stringify(data) }, { onConflict: 'key' });
+            }
+        };
+
         window.handleLogout = async () => { await supabase.auth.signOut(); window.location.href = 'login.html'; };
+
+        // Wrap init to ensure cache is updated on visit
+        const originalInit = init;
+        init = async () => {
+            await originalInit();
+            await updatePublicCache();
+        };
+
         init();
     </script>
 </body>
