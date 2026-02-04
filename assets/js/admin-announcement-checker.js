@@ -39,6 +39,11 @@ async function checkAnnouncements() {
 
         // 3. Strict Filter by role
         const filteredAnnouncements = announcements.filter(anc => {
+            // Exclude public announcements from admin dashboard
+            if (Array.isArray(anc.target_roles) && anc.target_roles.includes('public')) {
+                return false;
+            }
+
             const hasRole = Array.isArray(anc.target_roles) && anc.target_roles.includes(userRole);
             const isSuper = userRole === 'super_admin';
             return hasRole || isSuper;
